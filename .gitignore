@@ -1,0 +1,36 @@
+# AI Memory and Data Files
+ai_memory.json
+user_preferences.json
+ai_knowledge.json
+conversations_*.txt
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Temporary Files
+*.tmp
+*.temp
