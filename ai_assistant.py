@@ -9,43 +9,82 @@ import time
 import sounddevice as sd
 import numpy as np
 import whisper
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
+
+# Global model cache to avoid reloading
+_whisper_model_cache = None
+_tts_engine_cache = None
 
 class AIAssistant:
     def __init__(self):
-        self.tts_engine = pyttsx3.init()
-        try:
-            self.whisper_model = whisper.load_model("base")
-        except:
-            self.whisper_model = None
+        global _tts_engine_cache, _whisper_model_cache
+
+        # Reuse cached TTS engine
+        if _tts_engine_cache is None:
+            _tts_engine_cache = pyttsx3.init()
+        self.tts_engine = _tts_engine_cache
+
+        # Lazy load Whisper model only when needed
+        self.whisper_model = None
+        self.executor = ThreadPoolExecutor(max_workers=2)
+        self.response_cache = {}  # Cache for search results
         
+    def _load_whisper_model(self):
+        """Lazy load Whisper model only when needed"""
+        global _whisper_model_cache
+        if _whisper_model_cache is None:
+            try:
+                _whisper_model_cache = whisper.load_model("base")
+            except:
+                return None
+        return _whisper_model_cache
+
     def speak(self, text):
-        """Convert text to speech"""
-        self.tts_engine.say(text)
-        self.tts_engine.runAndWait()
-    
+        """Convert text to speech (async)"""
+        # Run in background thread to avoid blocking
+        self.executor.submit(self._speak_sync, text)
+
+    def _speak_sync(self, text):
+        """Synchronous speak operation"""
+        try:
+            self.tts_engine.say(text)
+            self.tts_engine.runAndWait()
+        except:
+            pass
+
     def listen(self):
-        """Convert speech to text using Whisper"""
+        """Convert speech to text using Whisper (lazy loaded)"""
+        # Load model only when needed
+        if self.whisper_model is None:
+            self.whisper_model = self._load_whisper_model()
+
         if not self.whisper_model:
             return "Voice recognition not available"
-        
+
         try:
             # Record audio
             duration = 5  # seconds
             sample_rate = 16000
             audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1)
             sd.wait()
-            
+
             # Convert to whisper format
             audio = audio.flatten().astype(np.float32)
-            
+
             # Transcribe
             result = self.whisper_model.transcribe(audio)
             return result["text"]
         except:
             return None
-    
+
     def search_web(self, query, max_results=3):
-        """Search web using DuckDuckGo"""
+        """Search web using DuckDuckGo (cached)"""
+        # Check cache first
+        cache_key = f"{query}:{max_results}".lower()
+        if cache_key in self.response_cache:
+            return self.response_cache[cache_key]
+
         try:
             results = []
             with DDGS() as ddgs:
@@ -55,6 +94,9 @@ class AIAssistant:
                         'snippet': result['body'],
                         'url': result['href']
                     })
+
+            # Cache the results
+            self.response_cache[cache_key] = results
             return results
         except:
             return []
@@ -68,22 +110,32 @@ class AIAssistant:
             return None
     
     def get_ai_response(self, prompt, context=""):
-        """Get response from local AI model"""
+        """Get response from local AI model (cached)"""
+        # Check cache first
+        cache_key = f"{prompt}:{context}".lower()[:100]
+        if cache_key in self.response_cache:
+            return self.response_cache[cache_key]
+
         try:
             full_prompt = f"Context: {context}\n\nUser: {prompt}\n\nProvide a helpful, concise response:"
-            
+
             response = ollama.chat(model='llama3.2', messages=[
                 {'role': 'user', 'content': full_prompt}
-            ])
-            
-            return response['message']['content']
+            ], stream=False)
+
+            result = response['message']['content']
+
+            # Cache the response
+            self.response_cache[cache_key] = result
+            return result
         except:
             return "AI model not available. Please install Ollama and pull llama3.2 model."
-    
+
     def summarize_content(self, content):
-        """Summarize long content"""
+        """Summarize long content (async)"""
         prompt = f"Summarize this content in 2-3 sentences: {content}"
-        return self.get_ai_response(prompt)
+        # Run in background to avoid blocking UI
+        self.executor.submit(self.get_ai_response, prompt)
 
 def main():
     st.set_page_config(page_title="Personal AI Assistant", layout="wide")

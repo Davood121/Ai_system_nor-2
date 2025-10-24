@@ -1,20 +1,24 @@
 import ollama
-import pyttsx3
 import threading
 import json
 import os
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from search_engine import MultiSearchEngine
 from location_finder import LocationFinder
 from weather_service import WeatherService
 from memory_system import AdvancedMemorySystem
 from translation_service import TranslationService
 from story_finder import StoryFinder
+from ai_personality import AIPersonality
+from advanced_search import AdvancedSearchEngine
+from smart_assistant import SmartAssistant
+from voice_clone import VoiceCloneSystem
+
 
 class TerminalAI:
     def __init__(self):
-        self.tts_engine = pyttsx3.init()
-        self.setup_voice()
         self.knowledge_file = "ai_knowledge.json"
         self.conversation_context = []
         self.conversation_memory = []  # Store full conversation history
@@ -24,238 +28,83 @@ class TerminalAI:
         self.memory_system = AdvancedMemorySystem()
         self.translation_service = TranslationService()
         self.story_finder = StoryFinder()
+        self.ai_personality = AIPersonality()
+        self.advanced_search = AdvancedSearchEngine()
+        self.smart_assistant = SmartAssistant()
+        self.voice = VoiceCloneSystem()
+
+        # Performance optimizations
+        self.executor = ThreadPoolExecutor(max_workers=4)  # Thread pool for async operations
+        self.response_cache = {}  # Cache for frequently asked questions
+        self.search_cache = {}  # Cache for search results
+        self.cache_ttl = 3600  # Cache time-to-live in seconds
+        self.last_cache_clear = datetime.now()
+
         self.load_knowledge()
         
-    def setup_voice(self, language='english'):
-        """Setup voice for specific language"""
-        voices = self.tts_engine.getProperty('voices')
-        
-        # Print available voices for debugging
-        print(f"\nAvailable voices for {language}:")
-        for i, voice in enumerate(voices):
-            print(f"{i}: {voice.name} - {voice.id}")
-        
-        # Language-specific voice selection with better matching
-        selected_voice = None
-        
-        if language == 'hindi':
-            # Look for Hindi voices
-            for voice in voices:
-                voice_name = voice.name.lower()
-                if any(keyword in voice_name for keyword in ['hindi', 'hi-in', 'hemant', 'kalpana']):
-                    selected_voice = voice
-                    break
-        elif language == 'telugu':
-            # Look for Telugu voices
-            for voice in voices:
-                voice_name = voice.name.lower()
-                if any(keyword in voice_name for keyword in ['telugu', 'te-in', 'chitra']):
-                    selected_voice = voice
-                    break
-        else:
-            # English voices
-            for voice in voices:
-                voice_name = voice.name.lower()
-                if any(keyword in voice_name for keyword in ['zira', 'hazel', 'eva', 'aria', 'jenny', 'david', 'mark']):
-                    selected_voice = voice
-                    break
-        
-        # Fallback to any available voice
-        if not selected_voice and voices:
-            selected_voice = voices[0]  # Use first available voice
-        
-        if selected_voice:
-            self.tts_engine.setProperty('voice', selected_voice.id)
-            print(f"Selected voice: {selected_voice.name}")
-        else:
-            print("No suitable voice found")
-        
-        # Natural speech settings
-        self.tts_engine.setProperty('rate', 175)
-        self.tts_engine.setProperty('volume', 0.85)
+
     
     def speak(self, text, language=None):
-        """Multi-language speech with improved language support"""
-        try:
-            # Use current language if not specified
-            if not language:
-                language = self.translation_service.current_language
-            
-            original_text = text
-            
-            # For non-English, translate the text
-            if language != 'english':
-                try:
-                    translated_text = self.translation_service.translate_response(text, language)
-                    if translated_text and translated_text != text:
-                        text = translated_text
-                        print(f"[Speaking in {language}]: {text}")
-                    else:
-                        print(f"[Translation failed, speaking in English]")
-                        language = 'english'
-                except Exception as e:
-                    print(f"[Translation error: {e}, speaking in English]")
-                    language = 'english'
-            
-            # Setup voice for the target language
-            self.setup_voice(language)
-            
-            # Clean and prepare text
-            clean_text = self.clean_text_for_speech(text)
-            
-            # Calculate natural speech speed
-            speed = self.calculate_speech_speed(clean_text)
-            self.tts_engine.setProperty('rate', speed)
-            
-            # Add slight pause before speaking
-            import time
-            time.sleep(0.2)
-            
-            # Speak the text
-            self.tts_engine.say(clean_text)
-            self.tts_engine.runAndWait()
-            
-        except Exception as e:
-            print(f"Speech error: {e}")
-            # Ultimate fallback - speak original text in English
-            try:
-                self.setup_voice('english')
-                self.tts_engine.say(original_text)
-                self.tts_engine.runAndWait()
-            except:
-                print("Voice synthesis completely failed")
-    
-    def calculate_speech_speed(self, text):
-        """Calculate natural speech speed like ChatGPT/Gemini"""
-        words = text.split()
-        word_count = len(words)
-        
-        # Analyze content type
-        sentences = text.count('.') + text.count('!') + text.count('?')
-        avg_sentence_length = word_count / max(sentences, 1)
-        
-        # Count complexity indicators
-        complex_words = sum(1 for word in words if len(word) > 10)
-        numbers = sum(1 for word in words if any(char.isdigit() for char in word))
-        technical_terms = sum(1 for word in words if word.lower() in 
-                            ['artificial', 'intelligence', 'technology', 'statistics', 'analysis'])
-        
-        # Natural base speed (like human conversation)
-        base_speed = 165
-        
-        # Adjust for natural flow
-        if avg_sentence_length > 15:  # Long sentences need slower pace
-            base_speed -= 15
-        elif avg_sentence_length < 8:  # Short sentences can be faster
-            base_speed += 10
-        
-        if complex_words > 2:  # Complex vocabulary
-            base_speed -= 20
-        elif numbers > 4:  # Many numbers/data
-            base_speed -= 25
-        elif technical_terms > 1:  # Technical content
-            base_speed -= 15
-        
-        # Conversational adjustments
-        if any(word in text.lower() for word in ['hello', 'hi', 'thanks', 'welcome']):
-            base_speed += 15  # Greetings can be faster
-        
-        # Natural range (like human speech)
-        return max(140, min(190, base_speed))
-    
-    def clean_text_for_speech(self, text):
-        """Clean text for natural AI speech"""
-        # Natural abbreviation replacements
-        replacements = {
-            'AI': 'artificial intelligence',
-            'USD': 'US dollars',
-            'INR': 'Indian rupees',
-            'COVID': 'covid',
-            'WHO': 'World Health Organization',
-            'GDP': 'GDP',
-            'URL': 'U R L',
-            'API': 'A P I',
-            'CEO': 'C E O',
-            'PM': 'Prime Minister',
-            'vs': 'versus',
-            '&': 'and',
-            '%': 'percent',
-            '$': 'dollars',
-            '₹': 'rupees',
-            'etc': 'etcetera',
-            'e.g.': 'for example',
-            'i.e.': 'that is'
-        }
-        
-        for abbr, full in replacements.items():
-            text = text.replace(abbr, full)
-        
-        # Add natural pauses
-        text = text.replace('. ', '. ')
-        text = text.replace(', ', ', ')
-        text = text.replace(': ', ': ')
-        
-        # Remove problematic characters
-        text = text.replace('[', '').replace(']', '')
-        text = text.replace('(', ' ').replace(')', ' ')
-        text = text.replace('"', '')
-        
-        # Fix multiple spaces
-        import re
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
-    
+        """Speak with your voice style (async)"""
+        # Run in background thread to avoid blocking
+        self.executor.submit(self.voice.speak_like_you, text)
+
+    def _clear_old_cache(self):
+        """Clear cache if TTL expired"""
+        now = datetime.now()
+        if (now - self.last_cache_clear).total_seconds() > self.cache_ttl:
+            self.response_cache.clear()
+            self.search_cache.clear()
+            self.last_cache_clear = now
+
     def search_web(self, query):
-        """Use smart search algorithm with clean query"""
+        """Use smart search algorithm with clean query (cached)"""
         # Extract just the main question, not the full context
         clean_query = query.split("Current question:")[-1].strip() if "Current question:" in query else query
-        return self.search_engine.smart_search(clean_query)
+
+        # Check cache first
+        cache_key = clean_query.lower()
+        if cache_key in self.search_cache:
+            return self.search_cache[cache_key]
+
+        # Search in background and cache result
+        result = self.search_engine.smart_search(clean_query)
+        self.search_cache[cache_key] = result
+        return result
     
 
     
-    def get_ai_response(self, prompt, context="", show_thinking=True):
-        """Get AI response with consciousness (thinking process)"""
+    def get_ai_response(self, prompt, context="", show_thinking=False):
+        """Get AI response (optimized - removed double call)"""
         try:
-            # Show AI's thinking process
-            if show_thinking:
-                thinking = self.get_ai_thinking(prompt, context)
-                print(f"\n🧠 [AI Thinking]")
-                print(f"💭 {thinking}\n")
-                
-                # Add small delay for natural feel
-                import time
-                time.sleep(0.5)
-            
+            # Check cache first
+            cache_key = f"{prompt}:{context}".lower()[:100]
+            if cache_key in self.response_cache:
+                return self.response_cache[cache_key]
+
+            # System prompt for consistent behavior
+            system_prompt = "You are a helpful AI assistant. Respond naturally and conversationally. For greetings like 'hello', respond with a simple greeting. For questions, provide clear and accurate answers."
+
             if context:
-                full_prompt = f"Based ONLY on this current search data: {context}\n\nQuestion: {prompt}\n\nProvide current 2025 information in 2-3 sentences. Do NOT use old data from 2020-2021. Use only the search results provided."
+                full_prompt = f"Based on this search data: {context}\n\nQuestion: {prompt}\n\nProvide a helpful response in 2-3 sentences."
             else:
-                full_prompt = f"{prompt}\n\nProvide current, up-to-date information in 2-3 sentences. If you don't have current data, say so."
-            
+                full_prompt = prompt
+
+            # Single call instead of two
             response = ollama.chat(model='llama3.2', messages=[
+                {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': full_prompt}
-            ])
-            return response['message']['content']
-        except:
+            ], stream=False)
+
+            result = response['message']['content']
+
+            # Cache the response
+            self.response_cache[cache_key] = result
+
+            return result
+        except Exception as e:
+            print(f"AI Error: {e}")
             return "AI model not available"
-    
-    def get_ai_thinking(self, query, context=""):
-        """Generate AI's internal thinking process"""
-        try:
-            thinking_prompt = f"""Think about this query step by step. Show your reasoning in 1-2 short sentences.
-            
-Query: {query}
-Context available: {'Yes' if context else 'No'}
-            
-Thinking:"""
-            
-            response = ollama.chat(model='llama3.2', messages=[
-                {'role': 'user', 'content': thinking_prompt}
-            ], options={'temperature': 0.3})
-            
-            return response['message']['content'].strip()
-        except:
-            return "Analyzing your question and considering the best response..."
     
     def summarize(self, text):
         """Summarize text"""
@@ -423,85 +272,121 @@ Thinking:"""
         return query, None
     
     def smart_response(self, query):
-        """Location-aware smart response"""
+        """Location-aware smart response (optimized)"""
         # Only search when actually needed
         if self.needs_search(query):
-            print("Searching for latest information...")
-            
+            print("🔍 Searching for latest information...")
+
             # Enhance query with location if pincode found
             enhanced_query, location_info = self.enhance_query_with_location(query)
-            
+
             # Debug: show enhanced query
             if location_info:
-                print(f"Searching for: {enhanced_query}")
-            
-            # Use enhanced query for search
+                print(f"📍 Searching for: {enhanced_query}")
+
+            # Use enhanced query for search (cached)
             search_results = self.search_web(enhanced_query)
             all_context = search_results[:1200]
-            
+
             # Enhanced AI prompt with conversation memory
             enhanced_prompt = f"Using ONLY the latest search results provided, give current 2025 information about: {query}. Do not use outdated data from 2020-2021. Focus on recent statistics and current trends."
-            
+
             # Add intelligent conversation context
             context = self.memory_system.get_context_for_query(query)
             if context:
                 enhanced_prompt += f"\nConversation context: {context}"
-            
+
             # Check user preferences
             location_pref = self.memory_system.get_preference('location')
             if location_pref and 'near me' in query.lower():
                 enhanced_prompt += f"\nUser location preference: {location_pref}"
-            
+
             if location_info:
                 enhanced_prompt += f"\nLocation context: {location_info['area']}, {location_info['district']}, {location_info['state']}"
-            
-            response = self.get_ai_response(enhanced_prompt, all_context, show_thinking=True)
-            
-            # Translate response if needed
+
+            # Get response without thinking process (faster)
+            response = self.get_ai_response(enhanced_prompt, all_context, show_thinking=False)
+
+            # Translate response if needed (async)
             current_lang = self.translation_service.current_language
             if current_lang != 'english':
                 response = self.translation_service.translate_response(response, current_lang)
-            
-            # Save to memory
-            self.save_to_memory(query, response)
-            
-            self.save_knowledge(query, response)
+
+            # Save to memory (async)
+            self.executor.submit(self.save_to_memory, query, response)
+            self.executor.submit(self.save_knowledge, query, response)
             self.conversation_context.append(f"Q: {query} A: {response}")
             return response
         else:
             # Resolve pronouns and add context
             resolved_query = self.resolve_pronouns(query)
             context = self.memory_system.get_context_for_query(query)
-            
+
             context_prompt = resolved_query
             if context:
                 context_prompt = f"Conversation context: {context}\nCurrent question: {resolved_query}"
-            
-            response = self.get_ai_response(context_prompt, show_thinking=True)
-            
-            # Translate response if needed
+
+            # Get response without thinking process (faster)
+            response = self.get_ai_response(context_prompt, show_thinking=False)
+
+            # Translate response if needed (async)
             current_lang = self.translation_service.current_language
             if current_lang != 'english':
                 response = self.translation_service.translate_response(response, current_lang)
-            
-            # Save to memory
-            self.save_to_memory(query, response)
+
+            # Save to memory (async)
+            self.executor.submit(self.save_to_memory, query, response)
             self.conversation_context.append(f"Q: {query} A: {response}")
             return response
 
 def main():
     ai = TerminalAI()
     
-    print("Terminal AI Assistant")
-    print("Commands: chat, search, wiki, summarize, weather/forecast, location/pincode, voice on/off/speed, quit")
-    print("Memory: memory, search memory [term], topic [name], export, learn [key] [value], correct [info], clear memory")
-    print("Languages: language [english/hindi/telugu], translate [text] to [language]")
-    print("Interactive: 'ask me a question', 'quiz me' - AI will ask you questions")
-    print("Stories: story [ghost/horror/adventure/romance], random story, search story [keyword]")
-    print("-" * 50)
+    print("🤖 Advanced AI Assistant System")
+    print("=" * 50)
     
-    voice_enabled = True  # Auto-enable voice
-    print("Voice enabled by default")
+    print("\n📝 BASIC COMMANDS:")
+    print("  chat                    - Start conversation")
+    print("  quit                    - Exit application")
+    print("  voice test              - Test voice cloning")
+    print("  voice sample            - Show voice sample used")
+    print("  human effects on/off    - Toggle breathing & pauses")
+    
+    print("\n🔍 SEARCH & INFO:")
+    print("  search [query]          - Web search")
+    print("  smart search [query]    - AI-powered search")
+    print("  wiki [topic]            - Wikipedia search")
+    print("  weather [location]      - Weather info")
+    print("  location [pincode]      - Location lookup")
+    
+    print("\n🌍 LANGUAGES:")
+    print("  english/hindi/telugu    - Switch language")
+    print("  translate [text] to [lang] - Translate text")
+    
+    print("\n📚 STORIES & FUN:")
+    print("  story [ghost/adventure] - Get stories")
+    print("  random story            - Random story")
+    print("  ask me a question       - AI asks you")
+    print("  quiz me                 - Interactive quiz")
+    
+    print("\n🧠 SMART FEATURES:")
+    print("  personality mode        - Activate personality")
+    print("  remind [msg] at [time]  - Set reminders")
+    print("  habit [name]            - Track habits")
+    print("  goal [name] [target]    - Set goals")
+    print("  daily summary           - Progress overview")
+    print("  suggestions             - Get personalized tips")
+    
+    print("\n💾 MEMORY & LEARNING:")
+    print("  memory                  - View statistics")
+    print("  learn [key] [value]     - Teach preferences")
+    print("  export                  - Export conversations")
+    print("  search memory [term]    - Search history")
+    
+    print("\n" + "=" * 50)
+    
+    print("🧠 Consciousness: Active | 🤖 Personality: Ready | 🎤 Voice Clone Active")
+    print("\nType any command or just start chatting! 💬")
     
     while True:
         try:
@@ -510,23 +395,25 @@ def main():
             if user_input.lower() == 'quit':
                 print("Goodbye!")
                 break
+                
+            elif user_input.lower() == 'voice test':
+                ai.voice.test_voice()
+                
+            elif user_input.lower() == 'voice sample':
+                if ai.voice.sample_voice:
+                    print(f"Voice sample: {os.path.basename(ai.voice.sample_voice)}")
+                else:
+                    print("No voice sample found")
+                    
+            elif user_input.lower() == 'human effects on':
+                ai.voice.human_effects = True
+                print("🎤 Human voice effects enabled (breathing, pauses, throat clearing)")
+                
+            elif user_input.lower() == 'human effects off':
+                ai.voice.human_effects = False
+                print("🎤 Human voice effects disabled (clean speech only)")
             
-            elif user_input.lower() == 'voice on':
-                voice_enabled = True
-                print("Voice enabled")
-                
-            elif user_input.lower() == 'voice off':
-                voice_enabled = False
-                print("Voice disabled")
-                
-            elif user_input.lower().startswith('voice speed '):
-                try:
-                    speed = int(user_input.split()[-1])
-                    ai.tts_engine.setProperty('rate', speed)
-                    print(f"Voice speed set to {speed}")
-                    ai.speak(f"Voice speed is now {speed}")
-                except:
-                    print("Invalid speed. Use: voice speed 150")
+
                     
             elif user_input.lower().startswith('language ') or user_input.lower() in ['telugu', 'hindi', 'english']:
                 if user_input.lower() in ['telugu', 'hindi', 'english']:
@@ -760,6 +647,8 @@ def main():
                     else:
                         print(f"No stories found with keyword: {keyword}")
                         ai.speak(f"No stories found with keyword {keyword}")
+                        
+
                     
             else:
                 # Handle language commands first

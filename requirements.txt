@@ -3,8 +3,12 @@ ddgs
 pyttsx3
 requests
 beautifulsoup4
-googletrans==4.0.0rc1
+googletrans
 colorama
 wikipedia
 numpy
 psutil
+pygame
+gtts
+elevenlabs
+pydub

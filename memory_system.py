@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 import re
+from threading import Timer
 
 class AdvancedMemorySystem:
     def __init__(self):
@@ -11,6 +12,12 @@ class AdvancedMemorySystem:
         self.user_preferences = {}
         self.topics = {}
         self.corrections = {}
+
+        # Batch save optimization
+        self.pending_save = False
+        self.save_timer = None
+        self.save_delay = 5  # Batch saves every 5 seconds
+
         self.load_memory()
         
     def load_memory(self):
@@ -31,21 +38,42 @@ class AdvancedMemorySystem:
             pass
     
     def save_memory(self):
-        """Save all memory data"""
+        """Save all memory data (batched)"""
         memory_data = {
             'conversations': self.conversations[-100:],  # Keep last 100
             'topics': self.topics,
             'corrections': self.corrections
         }
-        
-        with open(self.memory_file, 'w') as f:
-            json.dump(memory_data, f, indent=2)
-            
-        with open(self.preferences_file, 'w') as f:
-            json.dump(self.user_preferences, f, indent=2)
-    
+
+        try:
+            with open(self.memory_file, 'w') as f:
+                json.dump(memory_data, f, indent=2)
+
+            with open(self.preferences_file, 'w') as f:
+                json.dump(self.user_preferences, f, indent=2)
+        except:
+            pass
+
+        self.pending_save = False
+
+    def schedule_save(self):
+        """Schedule a batched save operation"""
+        if self.pending_save:
+            return  # Already scheduled
+
+        self.pending_save = True
+
+        # Cancel previous timer if exists
+        if self.save_timer:
+            self.save_timer.cancel()
+
+        # Schedule save after delay
+        self.save_timer = Timer(self.save_delay, self.save_memory)
+        self.save_timer.daemon = True
+        self.save_timer.start()
+
     def add_conversation(self, query, response):
-        """Add conversation with topic detection"""
+        """Add conversation with topic detection (batched save)"""
         conversation = {
             'id': len(self.conversations) + 1,
             'timestamp': datetime.now().isoformat(),
@@ -54,10 +82,12 @@ class AdvancedMemorySystem:
             'topic': self.detect_topic(query),
             'entities': self.extract_entities(query)
         }
-        
+
         self.conversations.append(conversation)
         self.update_topics(conversation['topic'], conversation)
-        self.save_memory()
+
+        # Schedule save instead of immediate save
+        self.schedule_save()
     
     def detect_topic(self, query):
         """Detect conversation topic"""
@@ -210,3 +240,36 @@ class AdvancedMemorySystem:
             'most_discussed_topic': max(self.topics.items(), key=lambda x: len(x[1]))[0] if self.topics else 'None'
         }
         return stats
+    
+    def detect_emotion(self, text):
+        """Detect emotional tone in text"""
+        emotions = {
+            'happy': ['happy', 'joy', 'excited', 'great', 'awesome', 'wonderful'],
+            'sad': ['sad', 'depressed', 'unhappy', 'terrible', 'awful', 'bad'],
+            'curious': ['how', 'what', 'why', 'when', 'where', 'curious'],
+            'grateful': ['thank', 'thanks', 'grateful', 'appreciate']
+        }
+        
+        text_lower = text.lower()
+        for emotion, keywords in emotions.items():
+            if any(keyword in text_lower for keyword in keywords):
+                return emotion
+        return 'neutral'
+    
+    def analyze_complexity(self, text):
+        """Analyze query complexity"""
+        words = text.split()
+        if len(words) <= 3:
+            return 'simple'
+        elif len(words) <= 10:
+            return 'medium'
+        else:
+            return 'complex'
+    
+    def get_personalized_suggestions(self):
+        """Get personalized suggestions based on patterns"""
+        suggestions = []
+        if self.topics:
+            popular_topic = max(self.topics.items(), key=lambda x: len(x[1]))[0]
+            suggestions.append(f"You often ask about {popular_topic}")
+        return suggestions
